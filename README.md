@@ -1,2 +1,3 @@
-# TradeFlow-TradingService
-This repository contains the trading service of Tradeflow application in Thamizhan M3 organization
+# TradeFlow Trading Service
+
+Owns orders and trade execution. This service is the best MongoDB StatefulSet showcase.
