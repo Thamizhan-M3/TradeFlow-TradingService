@@ -1,0 +1,82 @@
+name: Trading Service CD
+
+# ─────────────────────────────────────────────
+# Triggers automatically AFTER "Trading Service CI"
+# completes successfully on master or qa.
+#
+#   master → patches values-prod.yaml  (prod env)
+#   qa     → patches values-dev.yaml   (dev  env)
+# ─────────────────────────────────────────────
+
+on:
+  workflow_run:
+    workflows: ["Trading Service CI"]
+    branches: [master, qa]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Job 1: Derive the image tag ────────────────────────────────────────
+  resolve-tag:
+    name: Resolve image tag
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+
+    outputs:
+      image_tag: ${{ steps.tag.outputs.tag }}
+      branch: ${{ steps.tag.outputs.branch }}
+
+    steps:
+      - name: Compute image tag
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BRANCH="${{ github.event.workflow_run.head_branch }}"
+          SHORT_SHA=$(echo "${{ github.event.workflow_run.head_sha }}" | cut -c1-7)
+
+          echo "branch=$BRANCH" >> $GITHUB_OUTPUT
+
+          if [[ "$BRANCH" == "master" ]]; then
+            TAG=$(gh release list \
+                    --repo "${{ github.repository }}" \
+                    --limit 1 \
+                    --json tagName \
+                    --jq '.[0].tagName')
+
+            if [ -z "$TAG" ]; then
+              echo "❌ Could not resolve latest release tag"
+              exit 1
+            fi
+            echo "✅ Resolved prod tag: $TAG"
+            echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+          elif [[ "$BRANCH" == "qa" ]]; then
+            TAG="qa-${SHORT_SHA}"
+            echo "✅ Resolved qa tag: $TAG"
+            echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+          else
+            echo "ℹ️  Branch '$BRANCH' is not deployable – skipping."
+            exit 0
+          fi
+
+  # ── Job 2: Call the reusable CD template ──────────────────────────────
+  update-helm:
+    name: Update Helm values
+    needs: resolve-tag
+    if: needs.resolve-tag.outputs.image_tag != ''
+
+    uses: Thamizhan-M3/TradeFlow-CommonTemplate/.github/workflows/_cd_template.yaml@master
+
+    with:
+      service_name: trading
+      image_tag: ${{ needs.resolve-tag.outputs.image_tag }}
+      branch: ${{ needs.resolve-tag.outputs.branch }}
+      helm_repo: Thamizhan-M3/Tradeflow-Kubernetes-Manifests
+      values_file_path: helm/tradeflow
+
+    secrets:
+      CD_PAT: ${{ secrets.CD_PAT }}
